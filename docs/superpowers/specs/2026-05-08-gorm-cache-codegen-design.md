@@ -1,0 +1,268 @@
+# GORM 缓存层 + 代码生成器 设计文档
+
+**日期**: 2026-05-08
+**状态**: 待实现
+
+## 概述
+
+仿 go-zero 模式，为项目 GORM 构建自建缓存层，包含：
+
+1. **运行时缓存框架** — 细粒度缓存、singleflight 防击穿、空值缓存防穿透、随机 TTL 防雪崩、写前查询+主动失效、集中统计
+2. **代码生成器** — 从 SQL DDL 文件自动生成带缓存的 CRUD 代码
+
+## 核心原则
+
+- **biz 层不感知缓存** — `biz.*Repo` 接口不变，`biz.*Usecase` 完全无改动
+- **data 层实现缓存** — 生成的 Repo 内部持有 `*gorm.DB` + `*redis.Client`，方法内部做缓存判断
+- **生成文件用 `_gen` 后缀** — 类似 `wire_gen.go`，可以安全重新生成
+- **每次重新生成会覆盖 `_gen` 文件** — 不编辑 `_gen` 文件，手写逻辑放在无 `_gen` 后缀的文件中
+- **合并式架构** — 一个 `*Repo` 结构体同时持有 DB 和 Redis，方法内部做缓存判断
+
+## 架构
+
+### 项目结构
+
+```
+internal/
+├── pkg/
+│   ├── cache/
+│   │   ├── cache.go          # 现有 Redis 封装（保留，增加 Take/Set/Del 方法）
+│   │   └── metrics.go        # 缓存命中率统计
+│   └── db/
+│       └── db.go             # 现有 GORM 连接（保留）
+│
+├── moduser/
+│   ├── data/
+│   │   ├── data.go           # wire provider（追加 NewUserRepo 的缓存版本）
+│   │   ├── user.go           # 手写代码（自定义逻辑）
+│   │   ├── user_model_gen.go # 生成：GORM Model struct
+│   │   └── user_cache_gen.go # 生成：带缓存的 Repo 实现
+│   └── biz/
+│       └── user.go           # 不变（biz 层不感知缓存）
+│
+cmd/
+└── genmodel/
+    ├── main.go               # CLI 入口
+    ├── parser.go             # SQL DDL 解析器
+    ├── generator.go          # Go 代码生成器（text/template + //go:embed）
+    └── templates/
+        ├── model.go.tmpl
+        └── cache_repo.go.tmpl
+```
+
+### 新增依赖
+
+- `golang.org/x/sync/singleflight` — 防击穿
+
+## 缓存框架设计
+
+### Metrics 统计
+
+```go
+type Metrics struct {
+    hits   atomic.Int64
+    misses atomic.Int64
+    dbOps  atomic.Int64
+    sfs    atomic.Int64
+}
+```
+
+方法：`HitRate()`, `HitCount()`, `MissCount()`, `DBOpCount()`, `SingleFlightCount()`
+
+### Redis 封装增强
+
+在现有 `cache.Redis` 基础上增加：
+
+```go
+func (r *Redis) Take(ctx, key, val, queryFn) error    // 缓存优先查询
+func (r *Redis) Set(ctx, key, val, ttl) error          // 写缓存
+func (r *Redis) Del(ctx, keys...) error                // 删缓存
+```
+
+`Take` 方法内部逻辑（对应 go-zero `TakeCtx`）：
+1. 先查缓存，命中则返回
+2. 未命中进入 `singleflight`，只有一个 goroutine 执行 `queryFn`
+3. DB 返回数据后写入缓存，其他并发请求直接复用结果
+
+### 三大保护策略
+
+| 策略 | 机制 | 配置 |
+|------|------|------|
+| 防雪崩 | TTL = 基础值 + 随机 jitter (±5%) | 每个表 `cacheTTL`, `cacheJitter` 常量 |
+| 防穿透 | DB 未命中时写空值占位符 `"*"`，短 TTL | `nullTTL = 60s` |
+| 防击穿 | singleflight 合并同一 key 的并发请求 | 全局单例 `singleflight.Group` |
+
+### 缓存 Key 命名规范
+
+```
+user:id:1              # 按主键，存完整对象 JSON
+user:username:admin    # 按唯一索引，存完整对象 JSON（副本）
+user:email:admin@x.com # 按唯一索引，存完整对象 JSON（副本）
+```
+
+每个唯一索引缓存 key 都存**完整的对象 JSON**（冗余副本），这样任意一个查询都能独立命中缓存。
+
+### TTL 管理
+
+每个表生成的 `*_cache_gen.go` 头部定义常量：
+
+```go
+const (
+    userCachePrefix = "user:"
+    userCacheTTL    = 2 * time.Hour
+    userCacheJitter = 30 * time.Minute  // 实际 TTL = TTL ± jitter*5%
+)
+```
+
+## 缓存失效机制（核心）
+
+### Update — 写前查询（Read-Before-Write）
+
+参考 go-zero `update.tpl`，当表有唯一索引缓存时：
+
+```go
+func (r *userRepo) UpdateUser(ctx context.Context, u *biz.User) (*biz.User, error) {
+    // 1. 先查旧记录（走缓存路径）
+    oldUser, err := r.GetUserByID(ctx, u.ID)
+    if err != nil {
+        return nil, err
+    }
+
+    // 2. 用旧数据构建所有缓存 key
+    keys := []string{
+        fmt.Sprintf("user:id:%d", oldUser.ID),
+        fmt.Sprintf("user:username:%s", oldUser.Username),
+    }
+
+    // 3. 写 DB + 主动失效
+    // ... GORM update ...
+    r.redis.Del(ctx, keys...)
+    return newUser, nil
+}
+```
+
+**关键点**：使用**旧记录的字段值**构建缓存 key，不是新值。这确保了即使唯一索引字段（如 username、email）被修改，旧的唯一索引缓存 key 也会被正确清除。
+
+### Delete — 同理
+
+先 `GetUserByID(pk)` 拿到旧记录，用旧数据构建 key，删 DB + 删缓存。
+
+### Insert — 直接写缓存
+
+新记录没有"旧缓存"问题，写入 DB 后直接按主键+所有唯一索引写缓存：
+
+```go
+func (r *userRepo) CreateUser(ctx context.Context, u *biz.User) (*biz.User, error) {
+    // ... GORM create ...
+    r.redis.Set(ctx, fmt.Sprintf("user:id:%d", user.ID), user, ttl)
+    r.redis.Set(ctx, fmt.Sprintf("user:username:%s", user.Username), user, ttl)
+    r.redis.Set(ctx, fmt.Sprintf("user:email:%s", user.Email), user, ttl)
+    return user, nil
+}
+```
+
+## 代码生成器设计
+
+### CLI 接口
+
+```bash
+# 单文件
+go run ./cmd/genmodel --sql migrations/001_user.sql
+
+# 批量目录
+go run ./cmd/genmodel --dir migrations/
+
+# 指定输出目录
+go run ./cmd/genmodel --sql migrations/001_user.sql --out internal/moduser/data
+```
+
+### SQL 解析
+
+从 `CREATE TABLE users (...)` 中提取：
+- 表名（`users` → 驼峰化 `User`）
+- 字段名、MySQL 类型、是否 NULL、默认值、注释
+- 主键 → 生成主键缓存 key 模板
+- 唯一索引（含 `UNIQUE KEY` 和 `uniqueIndex` 标签语义）→ 生成唯一索引缓存 key 模板
+- 时间戳字段（`created_at`, `updated_at`）→ 跳过 UPDATE 的 set 子句
+
+### 生成模板
+
+**model.go.tmpl** → `*_model_gen.go`
+- GORM Model struct（字段映射、标签）
+- `TableName()` 方法
+
+**cache_repo.go.tmpl** → `*_cache_gen.go`
+- `*Repo` 结构体（持有 `*gorm.DB` + `*redis.Client`）
+- `New*Repo(db, redis, logger)` 构造函数
+- `Create*` — 写 DB → 写所有缓存 key（主键 + 全部唯一索引）
+- `Update*` — **先 `GetByID` 查旧记录** → 用旧数据构建 key → 写 DB → `Del` 旧 key
+- `Get*ByID` — Redis `Take` → miss 则 GORM 查询 → 写缓存 → 返回
+- `Get*By{UniqueField}` — Redis `Take` → miss 则 GORM 查询 → 写缓存 → 返回
+- `Delete*` — **先 `GetByID` 查旧记录** → 用旧数据构建 key → 删 DB → `Del` 旧 key
+- `List*` — 直接查 DB（不缓存，列表查询走 `QueryRowsNoCache` 模式）
+
+### 生成文件规则
+
+- 生成文件使用 `_gen.go` 后缀
+- 文件头部：`// Code generated by genmodel. DO NOT EDIT.`
+- 每次生成完全覆盖
+- 手写代码保留在无 `_gen` 后缀的文件中
+
+## 读流程详解
+
+### 主键查询 GetUserByID
+
+```
+GetUserByID(ctx, id)
+  ├── 构建 key: "user:id:1"
+  ├── Redis GET
+  │     ├── HIT → 反序列化 → metrics.Hit++ → 返回
+  │     └── MISS → metrics.Miss++ → singleflight
+  │           ├── 唯一执行者 → metrics.DBOp++ → GORM WHERE id=?
+  │           │     ├── 找到 → JSON 写入 Redis (TTL+jitter) → 返回
+  │           │     └── 未找到 → 写入 "*" (TTL=60s) → 返回 ErrNotFound
+  │           └── 等待者 → 直接返回共享结果
+  └── 返回
+```
+
+### 唯一索引查询 GetUserByUsername
+
+```
+GetUserByUsername(ctx, username)
+  ├── 构建 key: "user:username:admin"
+  ├── Redis GET
+  │     ├── HIT → 反序列化 → metrics.Hit++ → 返回
+  │     └── MISS → metrics.Miss++ → singleflight
+  │           ├── 唯一执行者 → metrics.DBOp++ → GORM WHERE username=?
+  │           │     ├── 找到 → JSON 写入 Redis (TTL+jitter) → 返回
+  │           │     └── 未找到 → 写入 "*" (TTL=60s) → 返回 ErrNotFound
+  │           └── 等待者 → 直接返回共享结果
+  └── 返回
+```
+
+> 注：go-zero 对唯一索引查询使用 `QueryRowIndex` 两级缓存（索引 key 存 PK，PK key 存数据），但在 GORM + 全对象缓存场景下，直接缓存完整对象更简单，冗余副本的成本可接受。
+
+## 错误处理
+
+- **Redis 不可用** — 所有缓存操作降级为 no-op，直接走 DB。`log.Warnf` 记录
+- **JSON 反序列化失败** — 视为缓存损坏，`Del` 该 key，重新从 DB 加载
+- **singleflight panic** — `recover` 后返回 error，不影响其他请求
+
+## 用户模块改造
+
+### 现有文件变更
+
+| 文件 | 动作 | 说明 |
+|------|------|------|
+| `data/user.go` | 编辑 | 移除 `User` struct，移除 `userRepo` 结构体和所有 CRUD 方法。保留 `NewUserRepo` 构造函数（改为调用生成的构造函数） |
+| `data/user_model_gen.go` | 新建 | 生成 `User` struct + `TableName()` |
+| `data/user_cache_gen.go` | 新建 | 生成 `userRepo` + 所有 CRUD 方法 |
+| `data/data.go` | 编辑 | `wire.NewSet` 追加生成的 `NewUserRepo` |
+| `pkg/cache/cache.go` | 编辑 | 增加 `Take`/`Set`/`Del` 方法和 `Metrics` |
+| `biz/user.go` | 不变 | biz 层完全不感知缓存 |
+
+## 测试策略
+
+- **缓存框架单元测试** — 用 `miniredis` 模拟 Redis，验证命中/miss/空值/singleflight/失效行为
+- **生成器单元测试** — SQL 解析 → struct 映射正确性验证
+- 不写集成测试（数据库/真实 Redis），留给 CI

@@ -1,0 +1,216 @@
+# Generated with protoc-gen-openapi
+# https://github.com/google/gnostic/tree/master/cmd/protoc-gen-openapi
+
+openapi: 3.0.3
+info:
+    title: UserService API
+    description: User service - handles user related operations
+    version: 0.0.1
+paths:
+    /api/user/v1/login:
+        post:
+            tags:
+                - UserService
+            description: Login and get token
+            operationId: UserService_Login
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/user.v1.LoginRequest'
+                required: true
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/user.v1.LoginReply'
+    /api/user/v1/register:
+        post:
+            tags:
+                - UserService
+            description: Register a new user
+            operationId: UserService_Register
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/user.v1.RegisterRequest'
+                required: true
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/user.v1.RegisterReply'
+    /api/user/v1/users:
+        get:
+            tags:
+                - UserService
+            description: List users
+            operationId: UserService_ListUsers
+            parameters:
+                - name: page
+                  in: query
+                  schema:
+                    type: integer
+                    format: int32
+                - name: pageSize
+                  in: query
+                  schema:
+                    type: integer
+                    format: int32
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/user.v1.ListUsersReply'
+    /api/user/v1/users/{id}:
+        get:
+            tags:
+                - UserService
+            description: Get user by id
+            operationId: UserService_GetUser
+            parameters:
+                - name: id
+                  in: path
+                  required: true
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/user.v1.GetUserReply'
+        delete:
+            tags:
+                - UserService
+            description: Delete user
+            operationId: UserService_DeleteUser
+            parameters:
+                - name: id
+                  in: path
+                  required: true
+                  schema:
+                    type: string
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/user.v1.DeleteUserReply'
+    /api/user/v1/users/{user.id}:
+        put:
+            tags:
+                - UserService
+            description: Update user
+            operationId: UserService_UpdateUser
+            parameters:
+                - name: user.id
+                  in: path
+                  required: true
+                  schema:
+                    type: string
+                - name: id
+                  in: query
+                  schema:
+                    type: string
+            requestBody:
+                content:
+                    application/json:
+                        schema:
+                            $ref: '#/components/schemas/user.v1.User'
+                required: true
+            responses:
+                "200":
+                    description: OK
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/user.v1.UpdateUserReply'
+components:
+    schemas:
+        user.v1.DeleteUserReply:
+            type: object
+            properties: {}
+        user.v1.GetUserReply:
+            type: object
+            properties:
+                user:
+                    $ref: '#/components/schemas/user.v1.User'
+        user.v1.ListUsersReply:
+            type: object
+            properties:
+                total:
+                    type: integer
+                    format: int32
+                items:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/user.v1.User'
+        user.v1.LoginReply:
+            type: object
+            properties:
+                token:
+                    type: string
+                user:
+                    $ref: '#/components/schemas/user.v1.User'
+        user.v1.LoginRequest:
+            type: object
+            properties:
+                username:
+                    type: string
+                password:
+                    type: string
+        user.v1.RegisterReply:
+            type: object
+            properties:
+                id:
+                    type: string
+                token:
+                    type: string
+        user.v1.RegisterRequest:
+            type: object
+            properties:
+                username:
+                    type: string
+                password:
+                    type: string
+                email:
+                    type: string
+                phone:
+                    type: string
+        user.v1.UpdateUserReply:
+            type: object
+            properties: {}
+        user.v1.User:
+            type: object
+            properties:
+                id:
+                    type: string
+                username:
+                    type: string
+                email:
+                    type: string
+                phone:
+                    type: string
+                nickname:
+                    type: string
+                avatar:
+                    type: string
+                status:
+                    type: integer
+                    format: int32
+                createdAt:
+                    type: string
+                updatedAt:
+                    type: string
+tags:
+    - name: UserService

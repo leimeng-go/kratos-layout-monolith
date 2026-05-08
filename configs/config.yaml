@@ -1,0 +1,29 @@
+server:
+  http:
+    addr: 0.0.0.0:8000
+    timeout: 10s
+  read_timeout: 30s
+  write_timeout: 30s
+
+data:
+  database:
+    driver: mysql
+    source: root:root@tcp(127.0.0.1:3306)/myapp?parseTime=True&loc=Local&charset=utf8mb4
+    max_open_conns: 100
+    max_idle_conns: 20
+  redis:
+    addr: 127.0.0.1:6379
+    password: ""
+    db: 0
+    read_timeout: 0.2s
+    write_timeout: 0.2s
+
+jwt:
+  secret: "your-secret-key-change-in-production"
+  expire: 7200
+
+auth:
+  whitelist:
+    - "/api/user/v1/login"
+    - "/api/user/v1/register"
+    - "/health"
