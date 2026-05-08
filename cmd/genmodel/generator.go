@@ -286,10 +286,10 @@ func buildGenData(table *Table, pkgName, modulePath, bizImport string) GenData {
 		}
 	}
 
-	// Update columns: exclude PK, auto-inc, and time fields
+	// Update columns: exclude PK, auto-inc, time fields, and password
 	var updateCols []Column
 	for _, c := range table.Columns {
-		if c.IsPK || c.AutoIncre || c.IsTime {
+		if c.IsPK || c.AutoIncre || c.IsTime || c.Name == "password" {
 			continue
 		}
 		updateCols = append(updateCols, Column{

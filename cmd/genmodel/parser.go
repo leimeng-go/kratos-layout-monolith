@@ -101,7 +101,16 @@ func ParseSQL(sql string) (*Table, error) {
 			for i, c := range columns {
 				if c.Name == pkColName {
 					columns[i].IsPK = true
-					columns[i].GormTag = fmt.Sprintf("`gorm:\"column:%s;primaryKey\"`", pkColName)
+					// Append primaryKey to existing tag (preserve autoIncrement etc.)
+					tag := strings.Trim(c.GormTag, "`")
+					tag = strings.TrimPrefix(tag, "gorm:\"")
+					tag = strings.TrimSuffix(tag, "\"")
+					if tag != "" && !strings.Contains(tag, "primaryKey") {
+						tag += ";primaryKey"
+					} else if tag == "" {
+						tag = "column:" + pkColName + ";primaryKey"
+					}
+					columns[i].GormTag = fmt.Sprintf("`%s`", "gorm:\""+tag+"\"")
 					primaryKey = columns[i]
 					break
 				}
