@@ -20,7 +20,7 @@ var (
 
 // User is the user domain model.
 type User struct {
-	ID        int64
+	Id        int64
 	Username  string
 	Password  string
 	Email     string

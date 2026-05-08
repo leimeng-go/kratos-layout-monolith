@@ -38,13 +38,13 @@ func (s *UserService) Register(ctx context.Context, req *v1.RegisterRequest) (*v
 		return nil, err
 	}
 
-	token, err := auth.GenerateToken(s.secret, user.ID, user.Username, s.expire)
+	token, err := auth.GenerateToken(s.secret, user.Id, user.Username, s.expire)
 	if err != nil {
 		return nil, err
 	}
 
 	return &v1.RegisterReply{
-		Id:    user.ID,
+		Id:    user.Id,
 		Token: token,
 	}, nil
 }
@@ -56,7 +56,7 @@ func (s *UserService) Login(ctx context.Context, req *v1.LoginRequest) (*v1.Logi
 		return nil, err
 	}
 
-	token, err := auth.GenerateToken(s.secret, user.ID, user.Username, s.expire)
+	token, err := auth.GenerateToken(s.secret, user.Id, user.Username, s.expire)
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func (s *UserService) ListUsers(ctx context.Context, req *v1.ListUsersRequest) (
 // UpdateUser implements UserServiceServer.
 func (s *UserService) UpdateUser(ctx context.Context, req *v1.UpdateUserRequest) (*v1.UpdateUserReply, error) {
 	_, err := s.uc.UpdateUser(ctx, &biz.User{
-		ID:       req.Id,
+		Id:       req.Id,
 		Nickname: req.User.Nickname,
 		Avatar:   req.User.Avatar,
 		Phone:    req.User.Phone,
@@ -117,7 +117,7 @@ func (s *UserService) DeleteUser(ctx context.Context, req *v1.DeleteUserRequest)
 
 func toPBUser(u *biz.User) *v1.User {
 	return &v1.User{
-		Id:        u.ID,
+		Id:        u.Id,
 		Username:  u.Username,
 		Email:     u.Email,
 		Phone:     u.Phone,

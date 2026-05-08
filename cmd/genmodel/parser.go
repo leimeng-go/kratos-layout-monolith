@@ -39,7 +39,7 @@ type Table struct {
 
 var mysqlToGoType = map[string]string{
 	"bigint":     "int64",
-	"int":        "int64",
+	"int":        "int32",
 	"tinyint":    "int32",
 	"smallint":   "int32",
 	"mediumint":  "int32",
@@ -128,7 +128,7 @@ func ParseSQL(sql string) (*Table, error) {
 		}
 
 		// Regular KEY / INDEX (skip for cache)
-		if regexp.MustCompile(`(?i)^(?:UNIQUE\s+)?KEY\s+`).MatchString(line) {
+		if regexp.MustCompile(`(?i)^(?:UNIQUE\s+)?(?:KEY|INDEX)\s+`).MatchString(line) {
 			continue
 		}
 

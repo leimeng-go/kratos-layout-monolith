@@ -10,6 +10,7 @@ import (
 	"github.com/go-kratos/kratos-layout-monolith/internal/conf"
 	"github.com/go-kratos/kratos-layout-monolith/internal/moduser/biz"
 	"github.com/go-kratos/kratos-layout-monolith/internal/moduser/data"
+	"github.com/go-kratos/kratos-layout-monolith/internal/pkg/cache"
 	"github.com/go-kratos/kratos-layout-monolith/internal/pkg/db"
 	"github.com/go-kratos/kratos-layout-monolith/internal/server"
 	"github.com/go-kratos/kratos/v2/log"
@@ -34,7 +35,9 @@ func initApp(bootstrap *conf.Bootstrap, logger log.Logger) (*appComponents, func
 	if err != nil {
 		return nil, nil, err
 	}
-	userRepo := data.NewUserRepo(gormDB, logger)
+	redis := conf.RedisFromBootstrap(bootstrap)
+	cacheRedis := cache.NewRedis(redis, logger)
+	userRepo := data.NewUserRepo(gormDB, cacheRedis, logger)
 	userUsecase := biz.NewUserUsecase(userRepo, logger)
 	mainAppComponents, cleanup2, err := newAppComponents(logger, httpServer, userUsecase)
 	if err != nil {

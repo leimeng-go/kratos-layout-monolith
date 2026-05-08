@@ -9,6 +9,7 @@ package main
 import (
 	"github.com/go-kratos/kratos-layout-monolith/internal/conf"
 	"github.com/go-kratos/kratos-layout-monolith/internal/moduser"
+	"github.com/go-kratos/kratos-layout-monolith/internal/pkg/cache"
 	"github.com/go-kratos/kratos-layout-monolith/internal/pkg/db"
 	"github.com/go-kratos/kratos-layout-monolith/internal/server"
 
@@ -20,6 +21,7 @@ func initApp(*conf.Bootstrap, kratoslog.Logger) (*appComponents, func(), error) 
 	panic(wire.Build(
 		conf.ProviderSet,
 		db.ProviderSet,
+		cache.ProviderSet,
 		moduser.ProviderSet,
 		server.ProviderSet,
 		newAppComponents,

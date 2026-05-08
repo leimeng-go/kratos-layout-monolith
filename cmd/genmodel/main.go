@@ -13,6 +13,7 @@ func main() {
 	dir := flag.String("dir", "", "Directory containing SQL files")
 	out := flag.String("out", "", "Output directory (default: current dir)")
 	biz := flag.String("biz", "", "Biz package import path (e.g., github.com/.../moduser/biz)")
+	module := flag.String("module", "", "Go module path (default: read from go.mod in cwd)")
 	flag.Parse()
 
 	if *sqlFile == "" && *dir == "" {
@@ -65,15 +66,22 @@ func main() {
 
 			bizImport := *biz
 			if bizImport == "" {
+				mod := *module
+				if mod == "" {
+					mod = guessModulePath()
+				}
 				absOut, _ := filepath.Abs(outDir)
 				parentDir := filepath.Dir(absOut)
 				if filepath.Base(absOut) == "data" {
-					bizImport = guessModulePath() + filepath.ToSlash(parentDir) + "/biz"
+					bizImport = mod + filepath.ToSlash(parentDir) + "/biz"
 				}
 			}
 
 			pkgName := filepath.Base(outDir)
-			modulePath := guessModulePath()
+			modulePath := *module
+		if modulePath == "" {
+			modulePath = guessModulePath()
+		}
 
 			if err := Generate(table, pkgName, modulePath, bizImport, outDir); err != nil {
 				fmt.Fprintf(os.Stderr, "Error generating %s: %v\n", table.Name, err)

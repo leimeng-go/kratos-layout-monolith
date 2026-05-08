@@ -92,9 +92,18 @@ func toBizUser(u *{{.Table.GoName}}) *{{.BizTypeName}} {
 func fromBizUser(u *{{.BizTypeName}}) *{{.Table.GoName}} {
 	return &{{.Table.GoName}}{
 {{- range .BizToFields}}
+	{{- if .IsTimeField}}
+		{{.GoField}}: mustParseTime(u.{{.BizField}}),
+	{{- else}}
 		{{.GoField}}: u.{{.BizField}},
+	{{- end}}
 {{- end}}
 	}
+}
+
+func mustParseTime(s string) time.Time {
+	t, _ := time.ParseInLocation("2006-01-02 15:04:05", s, time.Local)
+	return t
 }
 
 func (r *{{.RepoTypeName}}) {{.CreateMethodName}}(ctx context.Context, u *{{.BizTypeName}}) (*{{.BizTypeName}}, error) {
@@ -117,7 +126,7 @@ func (r *{{.RepoTypeName}}) {{.UpdateMethodName}}(ctx context.Context, u *{{.Biz
 	}
 	oldKeys := r.modelCacheKeys(old)
 
-	if err := r.db.WithContext(ctx).Model(&{{.Table.GoName}}{ID: u.{{.Table.PrimaryKey.GoName}}}).Updates(map[string]any{
+	if err := r.db.WithContext(ctx).Model(&{{.Table.GoName}}{ {{.Table.PrimaryKey.GoName}}: u.{{.Table.PrimaryKey.GoName}} }).Updates(map[string]any{
 {{- range .UpdateColumns}}
 		"{{.Name}}": u.{{.GoName}},
 {{- end}}
@@ -317,8 +326,9 @@ func buildGenData(table *Table, pkgName, modulePath, bizImport string) GenData {
 			continue
 		}
 		bizToFields = append(bizToFields, BizField{
-			BizField: c.GoName,
-			GoField:  c.GoName,
+			BizField:    c.GoName,
+			GoField:     c.GoName,
+			IsTimeField: c.IsTime,
 		})
 	}
 
