@@ -19,6 +19,7 @@ type Column struct {
 	IsTime    bool
 	AutoIncre bool
 	IsPK      bool
+	GormTag   string // GORM struct tag, e.g. `gorm:"column:id;primaryKey;autoIncrement"`
 }
 
 // UniqueIndex represents a unique index on one or more columns.
@@ -97,10 +98,11 @@ func ParseSQL(sql string) (*Table, error) {
 		if pkRe := regexp.MustCompile(`(?i)^PRIMARY\s+KEY\s*\(([^)]+)\)`); pkRe.MatchString(line) {
 			pkMatch := pkRe.FindStringSubmatch(line)
 			pkColName := strings.TrimSpace(pkMatch[1])
-			for _, c := range columns {
+			for i, c := range columns {
 				if c.Name == pkColName {
-					c.IsPK = true
-					primaryKey = c
+					columns[i].IsPK = true
+					columns[i].GormTag = fmt.Sprintf("`gorm:\"column:%s;primaryKey\"`", pkColName)
+					primaryKey = columns[i]
 					break
 				}
 			}
@@ -193,6 +195,18 @@ func parseColumn(line string) (Column, error) {
 	isTime := goType == "time.Time"
 	autoIncre := strings.Contains(upperRest, "AUTO_INCREMENT")
 
+	// Build GORM tag
+	var tags []string
+	tags = append(tags, "column:"+colName)
+	if autoIncre {
+		tags = append(tags, "primaryKey")
+		tags = append(tags, "autoIncrement")
+	}
+	if size > 0 {
+		tags = append(tags, fmt.Sprintf("size:%d", size))
+	}
+	gormTag := fmt.Sprintf("`gorm:\"%s\"`", strings.Join(tags, ";"))
+
 	return Column{
 		Name:      colName,
 		GoName:    toCamel(colName),
@@ -202,6 +216,7 @@ func parseColumn(line string) (Column, error) {
 		Nullable:  nullable,
 		IsTime:    isTime,
 		AutoIncre: autoIncre,
+		GormTag:   gormTag,
 	}, nil
 }
 
