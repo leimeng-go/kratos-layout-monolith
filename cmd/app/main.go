@@ -5,8 +5,8 @@ import (
 	"os"
 
 	"github.com/go-kratos/kratos-layout-monolith/internal/conf"
-	"github.com/go-kratos/kratos-layout-monolith/internal/moduser"
-	"github.com/go-kratos/kratos-layout-monolith/internal/moduser/biz"
+	"github.com/go-kratos/kratos-layout-monolith/internal/model/user"
+	"github.com/go-kratos/kratos-layout-monolith/internal/model/user/biz"
 	kratoslog "github.com/go-kratos/kratos/v2/log"
 
 	"github.com/go-kratos/kratos/v2"
@@ -92,7 +92,7 @@ func main() {
 	defer cleanup()
 
 	// Register module routes
-	moduser.RegisterHTTP(components.httpServer, components.userUsecase, baseLogger, bc.Jwt)
+	user.RegisterHTTP(components.httpServer, components.userUsecase, baseLogger, bc.Jwt)
 
 	if err := components.app.Run(); err != nil {
 		logHelper.Fatalf("app run error: %v", err)

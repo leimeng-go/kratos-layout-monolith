@@ -8,9 +8,10 @@ package main
 
 import (
 	"github.com/go-kratos/kratos-layout-monolith/internal/conf"
-	"github.com/go-kratos/kratos-layout-monolith/internal/moduser"
+	"github.com/go-kratos/kratos-layout-monolith/internal/model/user"
 	"github.com/go-kratos/kratos-layout-monolith/internal/pkg/cache"
 	"github.com/go-kratos/kratos-layout-monolith/internal/pkg/db"
+	"github.com/go-kratos/kratos-layout-monolith/internal/pkg/lock"
 	"github.com/go-kratos/kratos-layout-monolith/internal/server"
 
 	kratoslog "github.com/go-kratos/kratos/v2/log"
@@ -22,7 +23,9 @@ func initApp(*conf.Bootstrap, kratoslog.Logger) (*appComponents, func(), error) 
 		conf.ProviderSet,
 		db.ProviderSet,
 		cache.ProviderSet,
-		moduser.ProviderSet,
+		cache.CachedDBProviderSet,
+		lock.ProviderSet,
+		user.ProviderSet,
 		server.ProviderSet,
 		newAppComponents,
 	))

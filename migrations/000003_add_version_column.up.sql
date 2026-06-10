@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN version BIGINT NOT NULL DEFAULT 0 COMMENT '乐观锁版本号' AFTER deleted_at;

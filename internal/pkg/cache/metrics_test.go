@@ -6,10 +6,10 @@ import (
 )
 
 func TestMetricsHitRate(t *testing.T) {
-	m := NewMetrics()
-	m.Hit()
-	m.Hit()
-	m.Miss()
+	m := NewLocalMetrics()
+	m.Hit("")
+	m.Hit("")
+	m.Miss("")
 	rate := m.HitRate()
 	expected := math.Round((2.0/3.0)*100) / 100
 	if rate != expected {
@@ -18,26 +18,26 @@ func TestMetricsHitRate(t *testing.T) {
 }
 
 func TestMetricsZeroHits(t *testing.T) {
-	m := NewMetrics()
-	m.Miss()
+	m := NewLocalMetrics()
+	m.Miss("")
 	if m.HitRate() != 0 {
 		t.Errorf("expected 0, got %.4f", m.HitRate())
 	}
 }
 
 func TestMetricsCounters(t *testing.T) {
-	m := NewMetrics()
+	m := NewLocalMetrics()
 	for i := 0; i < 10; i++ {
-		m.Hit()
+		m.Hit("")
 	}
 	for i := 0; i < 5; i++ {
-		m.Miss()
+		m.Miss("")
 	}
 	for i := 0; i < 3; i++ {
-		m.DBOp()
+		m.DBOp("")
 	}
 	for i := 0; i < 2; i++ {
-		m.SingleFlight()
+		m.SingleFlight("")
 	}
 
 	if m.HitCount() != 10 {

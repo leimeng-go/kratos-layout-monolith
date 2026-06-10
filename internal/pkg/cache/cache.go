@@ -7,6 +7,8 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/go-kratos/aegis/circuitbreaker"
+	"github.com/go-kratos/aegis/circuitbreaker/sre"
 	"github.com/go-kratos/kratos-layout-monolith/internal/conf"
 
 	"github.com/go-kratos/kratos/v2/log"
@@ -17,24 +19,46 @@ import (
 
 const notFoundPlaceholder = "*"
 
-// ErrNotFound indicates the requested record was not found in the database.
-var ErrNotFound = errors.New("not found")
+var (
+	ErrNotFound     = errors.New("not found")
+	errPlaceholder  = errors.New("placeholder")
+	defaultExpiry   = 2 * time.Hour
+	defaultNotFound = 1 * time.Minute
+	expiryDeviation = 0.05
+)
 
-// ProviderSet is cache providers.
 var ProviderSet = wire.NewSet(NewRedis)
 
-// Redis wraps a Redis client with cache operations.
 type Redis struct {
-	Client  *redis.Client
-	metrics *Metrics
-	sf      singleflight.Group
+	Client         *redis.Client
+	collector      MetricsCollector
+	sf             singleflight.Group
+	expiry         time.Duration
+	notFoundExpiry time.Duration
+	breaker        circuitbreaker.CircuitBreaker
+	logger         *log.Helper
+	cancel         context.CancelFunc
 }
 
-// NewRedis creates a new Redis client with cache capabilities.
 func NewRedis(c *conf.Redis, logger log.Logger) *Redis {
+	helper := log.NewHelper(log.With(logger, "component", "cache"))
+
+	r := &Redis{
+		collector:      NewLocalMetrics(),
+		expiry:         defaultExpiry,
+		notFoundExpiry: defaultNotFound,
+		breaker: sre.NewBreaker(
+			sre.WithSuccess(0.6),
+			sre.WithRequest(100),
+			sre.WithWindow(3*time.Second),
+			sre.WithBucket(10),
+		),
+		logger: helper,
+	}
+
 	if c == nil {
-		log.NewHelper(logger).Warn("redis config is nil, skipping redis initialization")
-		return &Redis{metrics: NewMetrics()}
+		helper.Warn("redis config is nil, skipping redis initialization")
+		return r
 	}
 
 	network := c.Network
@@ -51,67 +75,76 @@ func NewRedis(c *conf.Redis, logger log.Logger) *Redis {
 		WriteTimeout: c.WriteTimeout,
 	})
 
-	helper := log.NewHelper(log.With(logger, "component", "redis"))
 	if err := client.Ping(context.Background()).Err(); err != nil {
 		helper.Warnf("redis ping failed: %v", err)
 	} else {
 		helper.Infof("redis connected at %s", c.Addr)
 	}
 
-	return &Redis{Client: client, metrics: NewMetrics()}
+	r.Client = client
+
+	statCtx, cancel := context.WithCancel(context.Background())
+	r.cancel = cancel
+	go r.statLoop(statCtx)
+
+	return r
 }
 
-// Close closes the Redis client.
 func (r *Redis) Close() error {
+	if r.cancel != nil {
+		r.cancel()
+	}
 	if r.Client != nil {
 		return r.Client.Close()
 	}
 	return nil
 }
 
-// Metrics returns the cache metrics collector.
-func (r *Redis) Metrics() *Metrics { return r.metrics }
+func (r *Redis) Metrics() MetricsCollector { return r.collector }
 
-// Take checks cache first, if miss calls queryFn to fetch from DB and caches the result.
-// Uses singleflight to prevent cache stampede.
-func (r *Redis) Take(ctx context.Context, key string, val any, ttl time.Duration, queryFn func() error) error {
-	r.metrics.Miss() // pessimistic count; will be corrected on hit path
+func (r *Redis) Expiry() time.Duration         { return r.expiry }
+func (r *Redis) NotFoundExpiry() time.Duration { return r.notFoundExpiry }
 
-	// Try cache first
-	data, err := r.Client.Get(ctx, key).Bytes()
+func (r *Redis) accept() bool {
+	return r.breaker.Allow() == nil
+}
+
+func (r *Redis) Take(ctx context.Context, key string, val any, queryFn func() error) error {
+	r.collector.Miss(key)
+
+	data, err := r.cacheGet(ctx, key)
 	if err == nil && len(data) > 0 {
 		if string(data) == notFoundPlaceholder {
-			r.metrics.Hit()
+			r.collector.Hit(key)
 			return ErrNotFound
 		}
-		r.metrics.Hit()
+		r.collector.Hit(key)
 		if jerr := json.Unmarshal(data, val); jerr == nil {
 			return nil
 		}
-		// Corrupted cache, delete and fall through to DB
-		r.Client.Del(ctx, key)
+		r.cacheDel(ctx, key)
 	}
 
-	// Use singleflight to prevent cache stampede
 	type result struct {
 		data []byte
 		nf   bool
 	}
 
 	val2, err, _ := r.sf.Do(key, func() (any, error) {
-		r.metrics.DBOp()
-		r.metrics.SingleFlight()
+		r.collector.DBOp(key)
+		r.collector.SingleFlight(key)
 		qerr := queryFn()
 		if errors.Is(qerr, ErrNotFound) {
-			r.Client.Set(ctx, key, notFoundPlaceholder, aroundDuration(60*time.Second))
+			r.cacheSetNotFound(ctx, key)
 			return result{nf: true}, nil
 		}
 		if qerr != nil {
+			r.collector.DbFail(key)
 			return nil, qerr
 		}
 
 		data, _ := json.Marshal(val)
-		r.Client.Set(ctx, key, data, aroundDuration(ttl))
+		r.cacheSet(ctx, key, data, r.expiry)
 		return result{data: data}, nil
 	})
 	if err != nil {
@@ -125,24 +158,128 @@ func (r *Redis) Take(ctx context.Context, key string, val any, ttl time.Duration
 	return json.Unmarshal(res.data, val)
 }
 
-// Set writes a value to cache with the given TTL and random jitter.
 func (r *Redis) Set(ctx context.Context, key string, val any, ttl time.Duration) error {
 	data, err := json.Marshal(val)
 	if err != nil {
 		return err
 	}
-	return r.Client.Set(ctx, key, data, aroundDuration(ttl)).Err()
+	return r.cacheSet(ctx, key, data, ttl)
 }
 
-// Del deletes one or more cache keys.
 func (r *Redis) Del(ctx context.Context, keys ...string) error {
-	if len(keys) == 0 {
+	return r.cacheDel(ctx, keys...)
+}
+
+func (r *Redis) cacheGet(ctx context.Context, key string) ([]byte, error) {
+	if r.Client == nil {
+		return nil, nil
+	}
+
+	if !r.accept() {
+		return nil, nil
+	}
+
+	data, err := r.Client.Get(ctx, key).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			r.breaker.MarkSuccess()
+			return nil, nil
+		}
+		r.breaker.MarkFailed()
+		r.logger.Warnf("redis get %s failed: %v", key, err)
+		return nil, nil
+	}
+	r.breaker.MarkSuccess()
+	return data, nil
+}
+
+func (r *Redis) cacheSet(ctx context.Context, key string, data []byte, ttl time.Duration) error {
+	if r.Client == nil {
 		return nil
 	}
-	return r.Client.Del(ctx, keys...).Err()
+
+	if !r.accept() {
+		return nil
+	}
+
+	err := r.Client.Set(ctx, key, data, aroundDuration(ttl)).Err()
+	if err != nil {
+		r.breaker.MarkFailed()
+		r.logger.Warnf("redis set %s failed: %v", key, err)
+		return nil
+	}
+	r.breaker.MarkSuccess()
+	return nil
+}
+
+func (r *Redis) cacheSetNotFound(ctx context.Context, key string) {
+	if r.Client == nil {
+		return
+	}
+
+	if !r.accept() {
+		return
+	}
+
+	seconds := int64(aroundDuration(r.notFoundExpiry).Seconds())
+	ok, err := r.Client.SetNX(ctx, key, notFoundPlaceholder, time.Duration(seconds)*time.Second).Result()
+	if err != nil {
+		r.breaker.MarkFailed()
+		r.logger.Warnf("redis setnx not-found %s failed: %v", key, err)
+		return
+	}
+	r.breaker.MarkSuccess()
+	if !ok {
+		r.logger.Infof("not-found placeholder already exists for key %s", key)
+	}
+}
+
+func (r *Redis) cacheDel(ctx context.Context, keys ...string) error {
+	if r.Client == nil || len(keys) == 0 {
+		return nil
+	}
+
+	if !r.accept() {
+		return nil
+	}
+
+	err := r.Client.Del(ctx, keys...).Err()
+	if err != nil {
+		r.breaker.MarkFailed()
+		r.logger.Warnf("redis del %v failed: %v", keys, err)
+		return err
+	}
+	r.breaker.MarkSuccess()
+	return nil
+}
+
+func (r *Redis) statLoop(ctx context.Context) {
+	reader, ok := r.collector.(MetricsReader)
+	if !ok {
+		return
+	}
+
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.logger.Infof("cache stats - hit: %d, miss: %d, hit_rate: %.2f, db_ops: %d, db_fails: %d, singleflight: %d",
+				reader.HitCount(),
+				reader.MissCount(),
+				reader.HitRate(),
+				reader.DBOpCount(),
+				reader.DbFailCount(),
+				reader.SingleFlightCount(),
+			)
+		}
+	}
 }
 
 func aroundDuration(d time.Duration) time.Duration {
-	jitter := time.Duration(float64(d) * 0.05 * (rand.Float64()*2 - 1))
+	jitter := time.Duration(float64(d) * expiryDeviation * (rand.Float64()*2 - 1))
 	return d + jitter
 }
