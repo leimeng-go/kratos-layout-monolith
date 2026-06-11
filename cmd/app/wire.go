@@ -23,10 +23,11 @@ func initApp(*conf.Bootstrap, kratoslog.Logger) (*appComponents, func(), error) 
 		conf.ProviderSet,
 		db.ProviderSet,
 		cache.ProviderSet,
+		server.ProviderSet,
 		cache.CachedDBProviderSet,
 		lock.ProviderSet,
 		user.ProviderSet,
-		server.ProviderSet,
+
 		newAppComponents,
 	))
 }

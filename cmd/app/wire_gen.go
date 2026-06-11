@@ -24,20 +24,22 @@ import (
 // Injectors from wire.go:
 
 func initApp(bootstrap *conf.Bootstrap, logger log.Logger) (*appComponents, func(), error) {
-	confServer := conf.ServerFromBootstrap(bootstrap)
-	auth := conf.AuthFromBootstrap(bootstrap)
-	jwt := conf.JwtFromBootstrap(bootstrap)
-	httpServer, err := server.NewHTTPServer(confServer, auth, jwt, logger)
-	if err != nil {
-		return nil, nil, err
-	}
 	database := conf.DatabaseFromBootstrap(bootstrap)
 	gormDB, cleanup, err := db.NewDatabase(database, logger)
+
 	if err != nil {
 		return nil, nil, err
 	}
 	redis := conf.RedisFromBootstrap(bootstrap)
 	cacheRedis := cache.NewRedis(redis, logger)
+	confServer := conf.ServerFromBootstrap(bootstrap)
+	auth := conf.AuthFromBootstrap(bootstrap)
+	jwt := conf.JwtFromBootstrap(bootstrap)
+	httpServer, err := server.NewHTTPServer(confServer, auth, jwt, gormDB, cacheRedis, logger)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
 	cachedDB := cache.NewCachedDB(gormDB, cacheRedis, logger)
 	userRepo := data.NewUserRepo(cachedDB, logger)
 	locker := lock.NewRedisLocker(cacheRedis)

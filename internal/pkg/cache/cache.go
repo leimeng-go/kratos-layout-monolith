@@ -12,8 +12,10 @@ import (
 	"github.com/go-kratos/kratos-layout-monolith/internal/conf"
 
 	"github.com/go-kratos/kratos/v2/log"
+	"github.com/go-redis/redis/extra/redisotel/v8"
 	"github.com/go-redis/redis/v8"
 	"github.com/google/wire"
+
 	"golang.org/x/sync/singleflight"
 )
 
@@ -44,7 +46,7 @@ func NewRedis(c *conf.Redis, logger log.Logger) *Redis {
 	helper := log.NewHelper(log.With(logger, "component", "cache"))
 
 	r := &Redis{
-		collector:      NewLocalMetrics(),
+		collector:      NewCompositeMetrics(NewLocalMetrics(), NewPrometheusMetrics("app", nil)),
 		expiry:         defaultExpiry,
 		notFoundExpiry: defaultNotFound,
 		breaker: sre.NewBreaker(
@@ -74,6 +76,7 @@ func NewRedis(c *conf.Redis, logger log.Logger) *Redis {
 		ReadTimeout:  c.ReadTimeout,
 		WriteTimeout: c.WriteTimeout,
 	})
+	client.AddHook(redisotel.NewTracingHook())
 
 	if err := client.Ping(context.Background()).Err(); err != nil {
 		helper.Warnf("redis ping failed: %v", err)

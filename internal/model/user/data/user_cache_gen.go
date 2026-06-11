@@ -2,6 +2,7 @@ package data
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/go-kratos/kratos-layout-monolith/internal/pkg/cache"
 
 	"github.com/go-kratos/kratos/v2/log"
+	"gorm.io/gorm"
 )
 
 const (
@@ -91,14 +93,33 @@ func mustParseTime(s string) time.Time {
 	return t
 }
 
+func normalizeNotFound(err error) error {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return cache.ErrNotFound
+	}
+	return err
+}
+
 func (r *userRepo) CreateUser(ctx context.Context, u *biz.User) (*biz.User, error) {
 	user := fromBizUser(u)
 	user.DelState = DelStateNo
+	keys := []string{}
+	if user.Username != "" {
+		keys = append(keys, userCacheUsernameKey(user.Username))
+	}
+	if user.Email != "" {
+		keys = append(keys, userCacheEmailKey(user.Email))
+	}
 	err := r.cdb.Exec(ctx, func() error {
 		return r.cdb.DBCtx(ctx).Create(user).Error
-	})
+	}, keys...)
 	if err != nil {
 		return nil, err
+	}
+	if user.Id > 0 {
+		if err := r.cdb.DelCache(ctx, userCacheIdKey(user.Id)); err != nil {
+			return nil, err
+		}
 	}
 	return toBizUser(user), nil
 }
@@ -108,7 +129,9 @@ func (r *userRepo) UpdateUser(ctx context.Context, u *biz.User) (*biz.User, erro
 	if err := r.cdb.DBCtx(ctx).Where("del_state = ?", DelStateNo).First(old, u.Id).Error; err != nil {
 		return nil, err
 	}
-	oldKeys := r.modelCacheKeys(old)
+	newData := fromBizUser(u)
+	newData.Id = old.Id
+	keys := append(r.modelCacheKeys(old), r.modelCacheKeys(newData)...)
 
 	err := r.cdb.Exec(ctx, func() error {
 		result := r.cdb.DBCtx(ctx).Model(&User{}).Where("id = ? AND version = ?", u.Id, old.Version).Updates(map[string]any{
@@ -127,7 +150,7 @@ func (r *userRepo) UpdateUser(ctx context.Context, u *biz.User) (*biz.User, erro
 			return biz.ErrNoRowsUpdate
 		}
 		return nil
-	}, oldKeys...)
+	}, keys...)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +169,7 @@ func (r *userRepo) UpdateUser(ctx context.Context, u *biz.User) (*biz.User, erro
 func (r *userRepo) GetUserByID(ctx context.Context, id int64) (*biz.User, error) {
 	var user User
 	err := r.cdb.QueryRow(ctx, &user, userCacheIdKey(id), func() error {
-		return r.cdb.DBCtx(ctx).Where("del_state = ?", DelStateNo).First(&user, id).Error
+		return normalizeNotFound(r.cdb.DBCtx(ctx).Where("del_state = ?", DelStateNo).First(&user, id).Error)
 	})
 	if err != nil {
 		return nil, err
@@ -159,18 +182,17 @@ func (r *userRepo) GetUserByUsername(ctx context.Context, username string) (*biz
 	err := r.cdb.QueryRowIndex(ctx, &user,
 		userCacheUsernameKey(username),
 		func() (string, error) {
-			var id int64
-			err := r.cdb.DBCtx(ctx).Model(&User{}).Where("username = ? AND del_state = ?", username, DelStateNo).Select("id").Scan(&id).Error
+			err := normalizeNotFound(r.cdb.DBCtx(ctx).Where("username = ? AND del_state = ?", username, DelStateNo).First(&user).Error)
 			if err != nil {
 				return "", err
 			}
-			if id == 0 {
+			if user.Id == 0 {
 				return "", cache.ErrNotFound
 			}
-			return userCacheIdKey(id), nil
+			return userCacheIdKey(user.Id), nil
 		},
 		func() error {
-			return r.cdb.DBCtx(ctx).Where("del_state = ?", DelStateNo).First(&user, user.Id).Error
+			return normalizeNotFound(r.cdb.DBCtx(ctx).Where("username = ? AND del_state = ?", username, DelStateNo).First(&user).Error)
 		},
 	)
 	if err != nil {
@@ -184,18 +206,17 @@ func (r *userRepo) GetUserByEmail(ctx context.Context, email string) (*biz.User,
 	err := r.cdb.QueryRowIndex(ctx, &user,
 		userCacheEmailKey(email),
 		func() (string, error) {
-			var id int64
-			err := r.cdb.DBCtx(ctx).Model(&User{}).Where("email = ? AND del_state = ?", email, DelStateNo).Select("id").Scan(&id).Error
+			err := normalizeNotFound(r.cdb.DBCtx(ctx).Where("email = ? AND del_state = ?", email, DelStateNo).First(&user).Error)
 			if err != nil {
 				return "", err
 			}
-			if id == 0 {
+			if user.Id == 0 {
 				return "", cache.ErrNotFound
 			}
-			return userCacheIdKey(id), nil
+			return userCacheIdKey(user.Id), nil
 		},
 		func() error {
-			return r.cdb.DBCtx(ctx).Where("del_state = ?", DelStateNo).First(&user, user.Id).Error
+			return normalizeNotFound(r.cdb.DBCtx(ctx).Where("email = ? AND del_state = ?", email, DelStateNo).First(&user).Error)
 		},
 	)
 	if err != nil {
@@ -206,15 +227,11 @@ func (r *userRepo) GetUserByEmail(ctx context.Context, email string) (*biz.User,
 
 func (r *userRepo) ListUsers(ctx context.Context, page, pageSize int32) ([]*biz.User, int32, error) {
 	var users []User
-	var total int64
-
-	db := r.cdb.DBCtx(ctx).Where("del_state = ?", DelStateNo)
-	if err := db.Model(&User{}).Count(&total).Error; err != nil {
-		return nil, 0, err
+	build := func(db *gorm.DB) *gorm.DB {
+		return db.Where("del_state = ?", DelStateNo)
 	}
-
-	offset := (page - 1) * pageSize
-	if err := db.Offset(int(offset)).Limit(int(pageSize)).Order("id DESC").Find(&users).Error; err != nil {
+	total, err := r.cdb.FindPageListByPageWithTotal(ctx, &users, &User{}, build, page, pageSize, "id DESC")
+	if err != nil {
 		return nil, 0, err
 	}
 
@@ -227,12 +244,10 @@ func (r *userRepo) ListUsers(ctx context.Context, page, pageSize int32) ([]*biz.
 
 func (r *userRepo) ListUsersByIdDesc(ctx context.Context, lastId, pageSize int32) ([]*biz.User, error) {
 	var users []User
-
-	db := r.cdb.DBCtx(ctx).Where("del_state = ?", DelStateNo)
-	if lastId > 0 {
-		db = db.Where("id < ?", lastId)
+	build := func(db *gorm.DB) *gorm.DB {
+		return db.Where("del_state = ?", DelStateNo)
 	}
-	if err := db.Order("id DESC").Limit(int(pageSize)).Find(&users).Error; err != nil {
+	if err := r.cdb.FindPageListByIdDesc(ctx, &users, build, lastId, pageSize); err != nil {
 		return nil, err
 	}
 

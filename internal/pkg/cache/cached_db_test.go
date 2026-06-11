@@ -8,8 +8,8 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-kratos/aegis/circuitbreaker/sre"
-	"github.com/go-redis/redis/v8"
 	"github.com/go-kratos/kratos/v2/log"
+	"github.com/go-redis/redis/v8"
 )
 
 func newTestCachedDB(t *testing.T) (*CachedDB, *miniredis.Miniredis) {
@@ -144,6 +144,26 @@ func TestExecDeletesCache(t *testing.T) {
 	_, e2 := s.Get("cache:users:username:alice")
 	if e1 == nil || e2 == nil {
 		t.Error("cache keys should be deleted after Exec")
+	}
+}
+
+func TestExecDeletesNotFoundPlaceholder(t *testing.T) {
+	cdb, s := newTestCachedDB(t)
+	defer s.Close()
+
+	key := "cache:users:username:new"
+	s.Set(key, notFoundPlaceholder)
+
+	err := cdb.Exec(context.Background(), func() error {
+		return nil
+	}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.Get(key)
+	if err == nil {
+		t.Error("placeholder should be deleted after Exec")
 	}
 }
 

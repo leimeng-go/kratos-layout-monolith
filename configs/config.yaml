@@ -27,3 +27,10 @@ auth:
     - "/api/user/v1/login"
     - "/api/user/v1/register"
     - "/health"
+
+tracing:
+  enabled: true
+  endpoint: 127.0.0.1:4317
+  insecure: true
+  sampler: 1.0
+

@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
+	"time"
 
 	"github.com/go-kratos/kratos-layout-monolith/internal/conf"
 	"github.com/go-kratos/kratos-layout-monolith/internal/model/user"
 	"github.com/go-kratos/kratos-layout-monolith/internal/model/user/biz"
+	internallogger "github.com/go-kratos/kratos-layout-monolith/internal/pkg/logger"
+	internaltracing "github.com/go-kratos/kratos-layout-monolith/internal/pkg/tracing"
+
 	kratoslog "github.com/go-kratos/kratos/v2/log"
 
 	"github.com/go-kratos/kratos/v2"
@@ -59,15 +64,8 @@ func newAppComponents(
 func main() {
 	flag.Parse()
 
-	baseLogger := kratoslog.NewStdLogger(os.Stdout)
-	logHelper := kratoslog.NewHelper(kratoslog.With(
-		baseLogger,
-		"ts", kratoslog.DefaultTimestamp,
-		"caller", kratoslog.DefaultCaller,
-		"service.id", id,
-		"service.name", Name,
-		"service.version", Version,
-	))
+	baseLogger := internallogger.WithService(internallogger.NewLogger(), id, Name, Version)
+	logHelper := kratoslog.NewHelper(baseLogger)
 
 	c := config.New(
 		config.WithSource(
@@ -84,6 +82,18 @@ func main() {
 	if err := c.Scan(&bc); err != nil {
 		logHelper.Fatalf("failed to scan config: %v", err)
 	}
+
+	traceShutdown, err := internaltracing.Init(context.Background(), bc.Tracing, Name, Version, id)
+	if err != nil {
+		logHelper.Fatalf("failed to init tracing: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := traceShutdown(ctx); err != nil {
+			logHelper.Errorf("failed to shutdown tracing: %v", err)
+		}
+	}()
 
 	components, cleanup, err := initApp(&bc, baseLogger)
 	if err != nil {

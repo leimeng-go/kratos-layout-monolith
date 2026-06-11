@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"time"
 
 	"github.com/go-kratos/kratos/v2/log"
@@ -15,7 +16,10 @@ type txKey struct{}
 
 const cacheSafeGapBetweenIndexAndPrimary = 5 * time.Second
 
-var CachedDBProviderSet = wire.NewSet(NewCachedDB)
+var (
+	CachedDBProviderSet = wire.NewSet(NewCachedDB)
+	fieldNamePattern    = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+)
 
 type CachedDB struct {
 	db     *gorm.DB
@@ -137,7 +141,7 @@ func (c *CachedDB) Exec(ctx context.Context, execFn func() error, cacheKeys ...s
 
 	if len(cacheKeys) > 0 {
 		if err := c.cache.Del(ctx, cacheKeys...); err != nil {
-			AsyncDel(context.Background(), c.cache, 3, []time.Duration{0, time.Second, 5*time.Second}, cacheKeys...)
+			AsyncDel(context.Background(), c.cache, 3, []time.Duration{0, time.Second, 5 * time.Second}, cacheKeys...)
 		}
 	}
 
@@ -146,6 +150,101 @@ func (c *CachedDB) Exec(ctx context.Context, execFn func() error, cacheKeys ...s
 
 func (c *CachedDB) QueryRowNoCache(ctx context.Context, queryFn func() error) error {
 	return queryFn()
+}
+
+func (c *CachedDB) QueryRowsNoCache(ctx context.Context, queryFn func() error) error {
+	return queryFn()
+}
+
+func (c *CachedDB) FindCount(ctx context.Context, model any, build func(*gorm.DB) *gorm.DB) (int64, error) {
+	var count int64
+	db := c.DBCtx(ctx).Model(model)
+	if build != nil {
+		db = build(db)
+	}
+	return count, db.Count(&count).Error
+}
+
+func (c *CachedDB) FindSum(ctx context.Context, model any, field string, build func(*gorm.DB) *gorm.DB) (float64, error) {
+	if !fieldNamePattern.MatchString(field) {
+		return 0, errors.New("invalid sum field")
+	}
+	var sum float64
+	db := c.DBCtx(ctx).Model(model)
+	if build != nil {
+		db = build(db)
+	}
+	return sum, db.Select("COALESCE(SUM(" + field + "), 0)").Scan(&sum).Error
+}
+
+func (c *CachedDB) FindAll(ctx context.Context, dest any, build func(*gorm.DB) *gorm.DB, orderBy string) error {
+	db := c.DBCtx(ctx)
+	if build != nil {
+		db = build(db)
+	}
+	if orderBy != "" {
+		db = db.Order(orderBy)
+	}
+	return db.Find(dest).Error
+}
+
+func (c *CachedDB) FindPageListByPage(ctx context.Context, dest any, build func(*gorm.DB) *gorm.DB, page, pageSize int32, orderBy string) error {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	db := c.DBCtx(ctx)
+	if build != nil {
+		db = build(db)
+	}
+	if orderBy != "" {
+		db = db.Order(orderBy)
+	}
+	return db.Offset(int((page - 1) * pageSize)).Limit(int(pageSize)).Find(dest).Error
+}
+
+func (c *CachedDB) FindPageListByPageWithTotal(ctx context.Context, dest any, model any, build func(*gorm.DB) *gorm.DB, page, pageSize int32, orderBy string) (int64, error) {
+	total, err := c.FindCount(ctx, model, build)
+	if err != nil {
+		return 0, err
+	}
+	return total, c.FindPageListByPage(ctx, dest, build, page, pageSize, orderBy)
+}
+
+func (c *CachedDB) FindPageListByIdDesc(ctx context.Context, dest any, build func(*gorm.DB) *gorm.DB, lastId, pageSize int32) error {
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	db := c.DBCtx(ctx)
+	if build != nil {
+		db = build(db)
+	}
+	if lastId > 0 {
+		db = db.Where("id < ?", lastId)
+	}
+	return db.Order("id DESC").Limit(int(pageSize)).Find(dest).Error
+}
+
+func (c *CachedDB) FindPageListByIdAsc(ctx context.Context, dest any, build func(*gorm.DB) *gorm.DB, lastId, pageSize int32) error {
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	db := c.DBCtx(ctx)
+	if build != nil {
+		db = build(db)
+	}
+	if lastId > 0 {
+		db = db.Where("id > ?", lastId)
+	}
+	return db.Order("id ASC").Limit(int(pageSize)).Find(dest).Error
+}
+
+func (c *CachedDB) Delete(ctx context.Context, model any, id any, cacheKeys ...string) error {
+	return c.Exec(ctx, func() error {
+		return c.DBCtx(ctx).Delete(model, id).Error
+	}, cacheKeys...)
 }
 
 func (c *CachedDB) DelCache(ctx context.Context, keys ...string) error {

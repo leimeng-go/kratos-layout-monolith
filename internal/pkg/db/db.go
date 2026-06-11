@@ -10,6 +10,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
+	"gorm.io/plugin/opentelemetry/tracing"
 )
 
 // ProviderSet is db providers.
@@ -49,6 +50,9 @@ func NewDatabase(c *conf.Database, logger log.Logger) (*gorm.DB, func(), error) 
 	})
 	if err != nil {
 		return nil, nil, err
+	}
+	if err := d.Use(tracing.NewPlugin(tracing.WithoutMetrics())); err != nil {
+		helper.Warnf("gorm tracing plugin setup failed: %v", err)
 	}
 
 	sqlDB, err := d.DB()

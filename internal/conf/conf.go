@@ -4,13 +4,21 @@ import "time"
 
 // Bootstrap is the root config structure.
 type Bootstrap struct {
-	Server *Server `yaml:"server"`
-	Data   *Data   `yaml:"data"`
-	Jwt    *Jwt    `yaml:"jwt"`
-	Auth   *Auth   `yaml:"auth"`
+	Server  *Server  `yaml:"server"`
+	Data    *Data    `yaml:"data"`
+	Jwt     *Jwt     `yaml:"jwt"`
+	Auth    *Auth    `yaml:"auth"`
+	Tracing *Tracing `yaml:"tracing"`
 }
 
 // Server config.
+type Tracing struct {
+	Enabled  bool    `yaml:"enabled"`
+	Endpoint string  `yaml:"endpoint"`
+	Insecure bool    `yaml:"insecure"`
+	Sampler  float64 `yaml:"sampler"`
+}
+
 type Server struct {
 	HTTP         *HTTP  `yaml:"http"`
 	ReadTimeout  string `yaml:"read_timeout"`
@@ -32,10 +40,10 @@ type Data struct {
 
 // Database config.
 type Database struct {
-	Driver      string `yaml:"driver"`
-	Source      string `yaml:"source"`
-	MaxOpenConns int   `yaml:"max_open_conns"`
-	MaxIdleConns int   `yaml:"max_idle_conns"`
+	Driver       string `yaml:"driver"`
+	Source       string `yaml:"source"`
+	MaxOpenConns int    `yaml:"max_open_conns"`
+	MaxIdleConns int    `yaml:"max_idle_conns"`
 }
 
 // Redis config.
