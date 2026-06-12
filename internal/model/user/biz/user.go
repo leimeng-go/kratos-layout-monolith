@@ -13,12 +13,12 @@ import (
 )
 
 var (
-	ErrUserNotFound    = errors.NotFound(v1.ErrorReason_USER_NOT_FOUND.String(), "user not found")
-	ErrUsernameExists  = errors.Conflict(v1.ErrorReason_USERNAME_EXISTS.String(), "username already exists")
+	ErrUserNotFound       = errors.NotFound(v1.ErrorReason_USER_NOT_FOUND.String(), "user not found")
+	ErrUsernameExists     = errors.Conflict(v1.ErrorReason_USERNAME_EXISTS.String(), "username already exists")
 	ErrInvalidCredentials = errors.Unauthorized(v1.ErrorReason_INVALID_CREDENTIALS.String(), "invalid credentials")
-	ErrTooManyRequests = errors.New(429, "TOO_MANY_REQUESTS", "request too frequent, please try again later")
-	ErrConcurrentUpdate = errors.Conflict("CONCURRENT_UPDATE", "data has been modified by another request, please retry")
-	ErrNoRowsUpdate     = errors.New(500, "NO_ROWS_UPDATE", "affected rows is 0, data may be stale")
+	ErrTooManyRequests    = errors.New(429, "TOO_MANY_REQUESTS", "request too frequent, please try again later")
+	ErrConcurrentUpdate   = errors.Conflict("CONCURRENT_UPDATE", "data has been modified by another request, please retry")
+	ErrNoRowsUpdate       = errors.New(500, "NO_ROWS_UPDATE", "affected rows is 0, data may be stale")
 )
 
 type User struct {
@@ -41,8 +41,10 @@ type UserRepo interface {
 	GetUserByID(context.Context, int64) (*User, error)
 	GetUserByUsername(context.Context, string) (*User, error)
 	ListUsers(context.Context, int32, int32) ([]*User, int32, error)
+	ListUsersByStatus(context.Context, int32, int32, int32) ([]*User, int32, error)
 	ListUsersByIdDesc(ctx context.Context, lastId, pageSize int32) ([]*User, error)
 	DeleteUser(context.Context, int64) error
+
 	Trans(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
@@ -111,6 +113,16 @@ func (uc *UserUsecase) ListUsers(ctx context.Context, page, pageSize int32) ([]*
 		pageSize = 10
 	}
 	return uc.repo.ListUsers(ctx, page, pageSize)
+}
+
+func (uc *UserUsecase) ListUsersByStatus(ctx context.Context, status, page, pageSize int32) ([]*User, int32, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+	return uc.repo.ListUsersByStatus(ctx, status, page, pageSize)
 }
 
 func (uc *UserUsecase) ListUsersByIdDesc(ctx context.Context, lastId, pageSize int32) ([]*User, error) {

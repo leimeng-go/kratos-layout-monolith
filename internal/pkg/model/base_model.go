@@ -1,8 +1,6 @@
-package data
+package model
 
-import (
-	"time"
-)
+import "time"
 
 const (
 	DelStateNo  int32 = 0

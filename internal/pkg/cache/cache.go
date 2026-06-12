@@ -112,6 +112,17 @@ func (r *Redis) accept() bool {
 	return r.breaker.Allow() == nil
 }
 
+func (r *Redis) markRedisResult(ctx context.Context, err error) {
+	if err == nil || errors.Is(err, redis.Nil) {
+		r.breaker.MarkSuccess()
+		return
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+		return
+	}
+	r.breaker.MarkFailed()
+}
+
 func (r *Redis) Take(ctx context.Context, key string, val any, queryFn func() error) error {
 	r.collector.Miss(key)
 
@@ -183,16 +194,14 @@ func (r *Redis) cacheGet(ctx context.Context, key string) ([]byte, error) {
 	}
 
 	data, err := r.Client.Get(ctx, key).Bytes()
+	r.markRedisResult(ctx, err)
 	if err != nil {
-		if err == redis.Nil {
-			r.breaker.MarkSuccess()
+		if errors.Is(err, redis.Nil) {
 			return nil, nil
 		}
-		r.breaker.MarkFailed()
 		r.logger.Warnf("redis get %s failed: %v", key, err)
 		return nil, nil
 	}
-	r.breaker.MarkSuccess()
 	return data, nil
 }
 
@@ -206,12 +215,11 @@ func (r *Redis) cacheSet(ctx context.Context, key string, data []byte, ttl time.
 	}
 
 	err := r.Client.Set(ctx, key, data, aroundDuration(ttl)).Err()
+	r.markRedisResult(ctx, err)
 	if err != nil {
-		r.breaker.MarkFailed()
 		r.logger.Warnf("redis set %s failed: %v", key, err)
 		return nil
 	}
-	r.breaker.MarkSuccess()
 	return nil
 }
 
@@ -226,12 +234,11 @@ func (r *Redis) cacheSetNotFound(ctx context.Context, key string) {
 
 	seconds := int64(aroundDuration(r.notFoundExpiry).Seconds())
 	ok, err := r.Client.SetNX(ctx, key, notFoundPlaceholder, time.Duration(seconds)*time.Second).Result()
+	r.markRedisResult(ctx, err)
 	if err != nil {
-		r.breaker.MarkFailed()
 		r.logger.Warnf("redis setnx not-found %s failed: %v", key, err)
 		return
 	}
-	r.breaker.MarkSuccess()
 	if !ok {
 		r.logger.Infof("not-found placeholder already exists for key %s", key)
 	}
@@ -247,12 +254,11 @@ func (r *Redis) cacheDel(ctx context.Context, keys ...string) error {
 	}
 
 	err := r.Client.Del(ctx, keys...).Err()
+	r.markRedisResult(ctx, err)
 	if err != nil {
-		r.breaker.MarkFailed()
 		r.logger.Warnf("redis del %v failed: %v", keys, err)
 		return err
 	}
-	r.breaker.MarkSuccess()
 	return nil
 }
 
